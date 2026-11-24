@@ -166,14 +166,19 @@
       const k = [a.ids.join(), b.ids.join()].sort().join('|');
       if (seen.has(k)) continue;
       seen.add(k);
-      const La = a.t1 - a.t0, Lb = b.t1 - b.t0;
+      // 1本の壁どうしで、どちらも内法で入れた壁なら、入れた内法の数字で比べる(画面に出ている数字と同じ)
+      const innerOf = (ch) => (ch.walls.length === 1 && ch.walls[0].innerMode && ch.walls[0].inner > 0 ? ch.walls[0].inner : null);
+      const ia = innerOf(a), ib = innerOf(b);
+      const useInner = ia !== null && ib !== null;
+      const La = useInner ? ia : a.t1 - a.t0, Lb = useInner ? ib : b.t1 - b.t0;
       const diff = Math.abs(La - Lb);
       if (diff > tol) {
         const mid = (ch) => { const t = (ch.t0 + ch.t1) / 2; return { x: ch.u.x * t + ch.n.x * ch.line, y: ch.u.y * t + ch.n.y * ch.line }; };
         const ma = mid(a), mb = mid(b);
+        const kindTxt = useInner ? '内法' : '壁の芯から芯までの長さ';
         push({
           level: diff > 50 ? 'error' : 'warn', kind: 'opposite', ids: [...a.ids, ...b.ids], x: (ma.x + mb.x) / 2, y: (ma.y + mb.y) / 2, line: { a: ma, b: mb },
-          msg: `向かい合う壁の長さが ${R(diff)}mm 違います(${R(La)} / ${R(Lb)}mm)。両側を測り直してください。`,
+          msg: `向かい合う2つの壁の${kindTxt}が ${R(diff)}mm 違います(${R(La)}mm と ${R(Lb)}mm)。部屋が四角なら同じになるはずなので、どちらかの数字を確かめてください。`,
         });
       }
     }
@@ -236,7 +241,8 @@
       const diff = Math.abs(L - w.traced);
       if (diff > Math.max(200, L * 0.1)) {
         const m = { x: (w.x1 + w.x2) / 2, y: (w.y1 + w.y2) / 2 };
-        push({ level: 'warn', kind: 'traced', ids: [w.id], x: m.x, y: m.y, msg: `入力値 ${R(L)}mm が下図の長さ(約${R(w.traced)}mm)と ${R(diff)}mm 違います。入力ミス(数字の入れ替わり等)がないか確認してください。` });
+        const given = w.innerMode && w.inner > 0 ? `入れた内法 ${R(w.inner)}mm(壁の厚みを含めた長さ ${R(L)}mm)` : `入れた長さ ${R(L)}mm`;
+        push({ level: 'warn', kind: 'traced', ids: [w.id], x: m.x, y: m.y, msg: `${given} が、下図をなぞった長さ(約${R(w.traced)}mm)と ${R(diff)}mm 違います。入力ミス(数字の入れ替わり等)がないか確認してください。` });
       }
     }
 

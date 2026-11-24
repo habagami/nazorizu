@@ -1603,7 +1603,8 @@
       const targets = [...new Set(it.ids)].map((id) => findEl(id)).filter(Boolean).slice(0, 3);
       const btns = targets.map((f, k) => {
         let name = COLL_LABEL[f.coll];
-        if (f.coll === 'walls') name = `壁 ${Math.round(NZ.wallFrame(f.el).L)}`;
+        // 壁は、画面の寸法と同じ数字(内法で入れた壁は内法、それ以外は芯々)で示す
+        if (f.coll === 'walls') name = f.el.innerMode && f.el.inner > 0 ? `壁 内法${Math.round(f.el.inner)}` : `壁 芯々${Math.round(NZ.wallFrame(f.el).L)}`;
         if (f.coll === 'fixtures') name = (NZ.FIXTURE_TYPES[f.el.type] || {}).label || name;
         return `<button data-fix="${f.el.id}" class="${k === 0 ? 'primary' : ''}">測り直す: ${esc(name)}</button>`;
       }).join('');
