@@ -148,7 +148,9 @@
   function renderUnderlay() {
     const g = $('#g-under'), u = P().underlay;
     if (st.mode !== 'draw' || !u || !u.src || !u.visible || !$('#lay-under').checked) { g.innerHTML = ''; return; }
-    g.innerHTML = `<image href="${u.src}" x="${u.x}" y="${u.y}" width="${u.w * u.mmPerPx}" height="${u.h * u.mmPerPx}" opacity="${u.opacity}" preserveAspectRatio="none"/>`;
+    // 下図は薄い青で表示し、自分で引いた線(墨色)と見分けやすくする
+    g.innerHTML = `<filter id="under-tint" color-interpolation-filters="sRGB"><feColorMatrix type="matrix" values="0.213 0.419 0.078 0 0.29  0.132 0.260 0.048 0 0.56  0.045 0.089 0.017 0 0.85  0 0 0 1 0"/></filter>`
+      + `<image href="${u.src}" x="${u.x}" y="${u.y}" width="${u.w * u.mmPerPx}" height="${u.h * u.mmPerPx}" opacity="${u.opacity}" preserveAspectRatio="none" filter="url(#under-tint)"/>`;
   }
   function renderAll() {
     st.S = NZ.sheetScale(P());
@@ -241,7 +243,8 @@
     return distToSeg(p, { x: w.x1 + c.x, y: w.y1 + c.y }, { x: w.x2 + c.x, y: w.y2 + c.y }) - w.thick / 2;
   }
   function hitTest(p) {
-    const tol = 14 / view().zoom;
+    // 指は先が太いので、ペンやマウスより広めに拾う
+    const tol = (lastPointerType === 'touch' ? 28 : 14) / view().zoom;
     const pr = P();
     if ($('#lay-photos').checked) for (const ph of [...(pr.photos || [])].reverse()) if (Math.hypot(p.x - ph.x, p.y - ph.y) <= NZ.PHOTO_R * st.S + tol) return ph.id;
     for (const l of [...pr.labels].reverse()) { const b = elBBox({ coll: 'labels', el: l }); if (p.x >= b.x0 && p.x <= b.x1 && p.y >= b.y0 && p.y <= b.y1) return l.id; }
@@ -399,16 +402,22 @@
 
   // ---------- 入力(ペン/指) ----------
   const pointers = new Map();
-  let gesture = null, action = null, lastTap = { t: 0, id: null };
+  let gesture = null, action = null, lastTap = { t: 0, id: null }, lastPointerType = 'mouse';
   let spaceDown = false;
 
   cv.addEventListener('pointerdown', (e) => {
     try { cv.setPointerCapture(e.pointerId); } catch (err) { /* 合成イベント等 */ }
+    // 画面に触れている指がないのに、前の指の記録が残っていたら消す
+    // (離したことが伝わらなかった指が残ると、次の操作がすべて「図面を動かす」になってしまうため)
+    if (e.isPrimary && pointers.size) { pointers.clear(); gesture = null; if (action) { action = null; st.temp = null; } }
     pointers.set(e.pointerId, { x: e.clientX, y: e.clientY, type: e.pointerType });
+    lastPointerType = e.pointerType;
     const isTouch = e.pointerType === 'touch';
     if (pointers.size >= 2 || e.button === 1 || e.button === 2 || spaceDown || st.mode === 'sheet' || (isTouch && !$('#opt-finger').checked)) {
       if (action) { action = null; st.temp = null; renderOverlay(); }
       startGesture();
+      // 「指1本で描く」がオフでも、動かさずに離したタップは、選ぶ・柱・部屋名などの操作として受け付ける
+      if (pointers.size === 1 && st.mode !== 'sheet' && e.button === 0) gesture.tap = { id: e.pointerId, x: e.clientX, y: e.clientY };
       return;
     }
     const p = screenToWorld(e.clientX, e.clientY);
@@ -418,7 +427,10 @@
   cv.addEventListener('pointermove', (e) => {
     if (!pointers.has(e.pointerId)) return;
     pointers.set(e.pointerId, Object.assign(pointers.get(e.pointerId), { x: e.clientX, y: e.clientY }));
-    if (gesture) { moveGesture(); return; }
+    if (gesture) {
+      if (gesture.tap && Math.hypot(e.clientX - gesture.tap.x, e.clientY - gesture.tap.y) > 8) gesture.tap = null;
+      moveGesture(); return;
+    }
     if (action && action.id === e.pointerId) {
       const p = screenToWorld(e.clientX, e.clientY);
       if (Math.hypot(e.clientX - action.startScr.x, e.clientY - action.startScr.y) > 6) action.moved = true;
@@ -429,7 +441,18 @@
   const endPointer = (e) => {
     if (!pointers.has(e.pointerId)) return;
     pointers.delete(e.pointerId);
-    if (gesture) { if (pointers.size === 0) gesture = null; else startGesture(); return; }
+    if (gesture) {
+      const tap = gesture.tap;
+      if (pointers.size === 0) gesture = null; else startGesture();
+      if (tap && tap.id === e.pointerId && e.type === 'pointerup' && pointers.size === 0) {
+        const p = screenToWorld(e.clientX, e.clientY);
+        action = { id: e.pointerId, start: p, startScr: { x: e.clientX, y: e.clientY }, pts: [p], moved: false };
+        toolDown(p, e);
+        const a = action; action = null;
+        toolUp(p, a, e);
+      }
+      return;
+    }
     if (action && action.id === e.pointerId) {
       const a = action;
       action = null;
@@ -439,6 +462,8 @@
   };
   cv.addEventListener('pointerup', endPointer);
   cv.addEventListener('pointercancel', endPointer);
+  // 指を離したことが別の形で伝わった場合も、記録を消す
+  cv.addEventListener('lostpointercapture', (e) => { if (pointers.has(e.pointerId)) endPointer({ pointerId: e.pointerId, type: 'pointercancel', clientX: e.clientX, clientY: e.clientY }); });
   cv.addEventListener('contextmenu', (e) => e.preventDefault());
   cv.addEventListener('wheel', (e) => {
     e.preventDefault();
@@ -607,7 +632,7 @@
         return;
       }
       const now = Date.now();
-      if (a.hit && lastTap.id === a.hit && now - lastTap.t < 400) { editEl(a.hit); lastTap = { t: 0, id: null }; return; }
+      if (a.hit && lastTap.id === a.hit && now - lastTap.t < 550) { editEl(a.hit); lastTap = { t: 0, id: null }; return; }
       lastTap = { t: now, id: a.hit };
       st.sel = a.hit;
       st.temp = null;
@@ -2231,8 +2256,9 @@
     // 指で描く: スマホ・タブレットで指1本の操作が図面の移動にならないよう、最初からオン(移動・拡大縮小は2本指)。
     // 利用者がオフにした場合は、その設定を端末に覚えておく
     const fingerOpt = $('#opt-finger');
-    try { const v = localStorage.getItem('naiso-zumen.finger'); fingerOpt.checked = v === null ? true : v === '1'; } catch (e) { fingerOpt.checked = true; }
-    fingerOpt.addEventListener('change', () => { try { localStorage.setItem('naiso-zumen.finger', fingerOpt.checked ? '1' : '0'); } catch (e) { /* 保存できない環境 */ } });
+    // 前の版では下のバーにあり、押し間違えてオフになった端末があったため、新しいキーで覚え直す(最初はオン)
+    try { const v = localStorage.getItem('naiso-zumen.finger2'); fingerOpt.checked = v === null ? true : v === '1'; } catch (e) { fingerOpt.checked = true; }
+    fingerOpt.addEventListener('change', () => { try { localStorage.setItem('naiso-zumen.finger2', fingerOpt.checked ? '1' : '0'); } catch (e) { /* 保存できない環境 */ } });
     if (!AI_ON) document.querySelectorAll('[data-ai]').forEach((el) => el.remove());
     const ed = $('#edition');
     if (ed && NZ.EDITION && NZ.EDITION.label) { ed.textContent = NZ.EDITION.label; ed.hidden = false; }
