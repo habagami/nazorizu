@@ -181,7 +181,15 @@
     if (st.mode !== 'draw') { g.innerHTML = ''; return; }
     const z = view().zoom, px = (n) => r2(n / z);
     let s = '';
-    if (st.sel) {
+    if (st.multi) for (const id of st.multi) {
+      const f = findEl(id);
+      if (!f) continue;
+      const e = f.el, fr = NZ.wallFrame(e), off = NZ.wallOffset(e), t = e.thick;
+      const q = (s0, k) => ({ x: e.x1 + fr.u.x * s0 + fr.n.x * k, y: e.y1 + fr.u.y * s0 + fr.n.y * k });
+      const pts = [q(0, off - t / 2), q(fr.L, off - t / 2), q(fr.L, off + t / 2), q(0, off + t / 2)];
+      s += `<polygon points="${pts.map((p) => `${r2(p.x)},${r2(p.y)}`).join(' ')}" fill="#E2552D" fill-opacity=".25" stroke="#E2552D" stroke-width="${px(2.5)}"/>`;
+    }
+    if (st.sel && !st.multi) {
       const f = findEl(st.sel);
       if (f) {
         const e = f.el;
@@ -411,6 +419,8 @@
   let gesture = null, action = null, lastTap = { t: 0, id: null }, lastPointerType = 'mouse';
   let insertWall = null; // 「窓・扉を入れる」で、窓・扉にする範囲を決めている壁
   let insertPick = null; // 1点目(壁の始点からの距離 s と、その点)
+  // 複数の壁を選んでいるとき(直交でつなぐ用)。null なら1つだけ選ぶふつうの選び方
+  st.multi = null;
   let spaceDown = false;
 
   cv.addEventListener('pointerdown', (e) => {
@@ -522,6 +532,7 @@
   };
   function setTool(t) {
     insertWall = null; insertPick = null;
+    if (st.multi) { st.multi = null; renderSelbar(); }
     st.tool = t;
     st.temp = null;
     if (t !== 'select') st.welcomeOff = true;
@@ -534,6 +545,7 @@
   function toolDown(p) {
     const t = st.tool;
     if (insertWall || t === 'opening') { st.temp = Object.assign({}, insertPick ? { snap: insertPick.pt } : {}, { pts: [p] }); renderOverlay(); return; }
+    if (t === 'select' && st.multi) { action.hit = hitTest(p); return; }
     if (t === 'select') {
       // 選択中の壁の端点を優先
       const z = view().zoom;
@@ -566,6 +578,53 @@
     }
     renderOverlay();
   }
+  // 選んだ壁を、縦・横にまっすぐ直してから、近くで交わる所(L字・T字)でつなぐ
+  // ・傾きが15°以内の壁だけ縦・横に直す(壁の中心を軸に回す)
+  // ・縦の壁と横の壁の中心線が交わる点の近く(800mm以内)に壁の端があれば、その端を交点まで伸ばす・縮める
+  // ・交点が壁の途中なら、その壁はそのまま(T字)。両方の端が交点に来ればL字
+  function orthoJoin(ids) {
+    const ws = ids.map((id) => findEl(id)).filter((f) => f && f.coll === 'walls').map((f) => f.el);
+    if (ws.length < 2) return '壁を2本以上選んでください';
+    const H = [], V = [];
+    let fixedAngle = 0;
+    for (const w of ws) {
+      const fr = NZ.wallFrame(w);
+      const deg = Math.abs((Math.atan2(fr.u.y, fr.u.x) * 180) / Math.PI) % 180;
+      const dh = Math.min(deg, 180 - deg), dv = Math.abs(deg - 90);
+      if (dh <= 15) { if (dh > 0.01) fixedAngle++; const y = (w.y1 + w.y2) / 2; w.y1 = y; w.y2 = y; H.push(w); }
+      else if (dv <= 15) { if (dv > 0.01) fixedAngle++; const x = (w.x1 + w.x2) / 2; w.x1 = x; w.x2 = x; V.push(w); }
+    }
+    // 壁の中心線の位置(なぞった線が壁の面のときは、壁厚の半分ずらす)
+    const cy = (h) => { const fr = NZ.wallFrame(h); return h.y1 + fr.n.y * NZ.wallOffset(h); };
+    const cx = (v) => { const fr = NZ.wallFrame(v); return v.x1 + fr.n.x * NZ.wallOffset(v); };
+    const TOL = 800;
+    let joins = 0;
+    const snapEnd = (w, axis, at) => {
+      // w の端のうち at に近い方を、at までの距離が TOL 以内なら合わせる。壁の途中(両端とも遠い)ならそのまま
+      const k = axis === 'x' ? ['x1', 'x2'] : ['y1', 'y2'];
+      const d1 = Math.abs(w[k[0]] - at), d2 = Math.abs(w[k[1]] - at);
+      const lo = Math.min(w[k[0]], w[k[1]]), hi = Math.max(w[k[0]], w[k[1]]);
+      const inside = at > lo + TOL && at < hi - TOL;
+      if (inside) return 'through';
+      const which = d1 <= d2 ? 1 : 2, d = Math.min(d1, d2);
+      if (d > TOL) return null;
+      w[k[which - 1]] = at;
+      delete w['free' + which];
+      return 'end';
+    };
+    for (const h of H) for (const v of V) {
+      const X = cx(v), Y = cy(h);
+      const hlo = Math.min(h.x1, h.x2), hhi = Math.max(h.x1, h.x2), vlo = Math.min(v.y1, v.y2), vhi = Math.max(v.y1, v.y2);
+      if (X < hlo - TOL || X > hhi + TOL || Y < vlo - TOL || Y > vhi + TOL) continue; // 交わらない
+      const a = snapEnd(h, 'x', X), b = snapEnd(v, 'y', Y);
+      if (a === 'end' || b === 'end') joins++;
+    }
+    NZ.syncInner(P());
+    commit();
+    const left = ws.length - H.length - V.length;
+    return `${H.length + V.length}本を縦・横に揃え${fixedAngle ? `(${fixedAngle}本の傾きを直し)` : ''}、${joins}か所でつなぎました${left ? `。斜めの壁 ${left}本はそのままです` : ''}`;
+  }
+
   // 床・範囲の四角に付ける点(四隅=2文字、各辺の中央=1文字)
   function rectHandles(e) {
     const x0 = e.x, y0 = e.y, x1 = e.x + e.w, y1 = e.y + e.h, mx = (x0 + x1) / 2, my = (y0 + y1) / 2;
@@ -688,6 +747,13 @@
       }
       insertPick = null;
       handleInsertStroke(a.pts, e);
+      return;
+    }
+    if (t === 'select' && st.multi) {
+      const f = a.hit && findEl(a.hit);
+      if (f && f.coll === 'walls') { if (st.multi.has(f.el.id)) st.multi.delete(f.el.id); else st.multi.add(f.el.id); }
+      else if (!a.hit) toast('壁をタップしてください');
+      renderOverlay(); renderSelbar();
       return;
     }
     if (t === 'select') {
@@ -1495,6 +1561,15 @@
   const COLL_LABEL = { walls: '壁', columns: '柱', fixtures: '設備・家具', labels: '文字', photos: '写真', dims: '寸法', zones: '範囲', floors: '床' };
   function renderSelbar() {
     const bar = $('#selbar');
+    if (st.multi && st.mode === 'draw') {
+      const n = st.multi.size;
+      bar.innerHTML = `<span class="sel-title">壁 ${n}本を選択中</span>`
+        + `<button data-sa="ortho-join" class="${n >= 2 ? '' : 'off'}" ${n >= 2 ? '' : 'disabled'}>直交でつなぐ</button>`
+        + `<button data-sa="multi-end">選び終わる</button>`;
+      bar.classList.remove('hidden');
+      $('#hint').textContent = 'つなぐ壁を続けてタップ(もう一度タップで外す)';
+      return;
+    }
     const f = st.sel && st.mode === 'draw' ? findEl(st.sel) : null;
     if (!f) { bar.classList.add('hidden'); return; }
     const e = f.el;
@@ -1510,7 +1585,7 @@
     if (f.coll === 'walls') {
       if (e.free1 || e.free2) btns.push(['join', 'つなぎ直す']);
       else if (wallTouches(e)) btns.push(['detach', '切り離す']);
-      btns.push(['insert', '窓・扉を入れる'], ['flip', '向き反転'], ['measure', '写真で測る']);
+      btns.push(['multi', '複数選ぶ'], ['insert', '窓・扉を入れる'], ['flip', '向き反転'], ['measure', '写真で測る']);
       // 壁いっぱいの建具は、壁ではなく建具の名前で表示する
       const op = fullOpening(e);
       if (op) title = `${op} ${Math.round(e.innerMode ? e.inner : NZ.wallFrame(e).L)}mm`;
@@ -1523,6 +1598,15 @@
   $('#selbar').addEventListener('click', (ev) => {
     const a = ev.target.dataset.sa;
     if (!a) return;
+    if (a === 'multi-end') { st.multi = null; $('#hint').textContent = HINTS[st.tool] || ''; renderOverlay(); renderSelbar(); return; }
+    if (a === 'ortho-join') {
+      const ids = st.multi ? [...st.multi] : [];
+      const msg = orthoJoin(ids);
+      st.multi = null; $('#hint').textContent = HINTS[st.tool] || '';
+      renderOverlay(); renderSelbar();
+      toast(msg);
+      return;
+    }
     const f = findEl(st.sel);
     if (!f) return;
     const e = f.el;
@@ -1538,6 +1622,7 @@
     }
     if (a === 'join') { delete e.free1; delete e.free2; NZ.syncInner(P()); commit(); toast('つなぎ直しました。端を動かすと、つながっている壁も一緒に動きます'); }
     if (a === 'insert') { startInsert(e); }
+    if (a === 'multi') { st.multi = new Set([e.id]); st.sel = null; renderOverlay(); renderSelbar(); }
     if (a === 'flip') {
       [e.x1, e.y1, e.x2, e.y2] = [e.x2, e.y2, e.x1, e.y1];
       e.segments = (e.segments || []).slice().reverse().map((g) => Object.assign({}, g, { hinge: g.hinge === 'end' ? 'start' : 'end', side: g.side === 'left' ? 'right' : 'left' }));
