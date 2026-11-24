@@ -220,6 +220,22 @@
         if (g.type === 'windowFixed') s += line(P(w, fr, g.s0, off), P(w, fr, g.s1, off), 'nz-glass');
         break;
       }
+      case 'windowSliding': {
+        // 引違いサッシ: 窓枠(両面の線)の中に、2本のレールでガラス戸を少し重ねて描く
+        s += line(P(w, fr, g.s0, off - t / 2), P(w, fr, g.s1, off - t / 2), 'nz-win');
+        s += line(P(w, fr, g.s0, off + t / 2), P(w, fr, g.s1, off + t / 2), 'nz-win');
+        if (g.sill) s += sill();
+        const n = Math.max(2, +g.panels || 2);
+        const tracks = n === 4 ? [0, 1, 1, 0] : Array.from({ length: n }, (_, i) => i % 2);
+        const kt = t * 0.14, pw = len / n, ov = Math.min(60, pw * 0.06);
+        for (let i = 0; i < n; i++) {
+          const sa = Math.max(g.s0, g.s0 + i * pw - ov / 2), sb = Math.min(g.s1, g.s0 + (i + 1) * pw + ov / 2);
+          const kc = off + (tracks[i] ? kt : -kt);
+          s += line(P(w, fr, sa, kc), P(w, fr, sb, kc), 'nz-win');
+          s += line(P(w, fr, sa, kc - t * 0.04), P(w, fr, sb, kc - t * 0.04), 'nz-glass');
+        }
+        break;
+      }
       case 'windowSash': {
         s += line(P(w, fr, g.s0, off - t / 2), P(w, fr, g.s1, off - t / 2), 'nz-win');
         s += line(P(w, fr, g.s0, off + t / 2), P(w, fr, g.s1, off + t / 2), 'nz-win');

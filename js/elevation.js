@@ -17,10 +17,10 @@
     fusuma: [0, 1800], shoji: [0, 1800],
     folding: [0, 2000], folding2: [0, 2000],
     opening: [0, 2000],
-    window: [900, 2000], windowFixed: [900, 2000], windowSash: [1200, 1800],
+    window: [900, 2000], windowSliding: [900, 2000], windowFixed: [900, 2000], windowSash: [1200, 1800],
   };
   NZ.ELEV_OPENING_V = OPENING_V;
-  const WINDOWS = ['window', 'windowFixed', 'windowSash'];
+  const WINDOWS = ['window', 'windowSliding', 'windowFixed', 'windowSash'];
   // 建具の標準の腰高・高さ。canBot=腰高を入力できる種類(窓・開口)
   NZ.elevOpeningDefault = function (type) {
     const v = OPENING_V[type];
@@ -236,6 +236,7 @@
         const fi = Math.min(0.9, w / 6, h / 6);
         s += R(x0 + fi, y0 + fi, w - 2 * fi, h - 2 * fi, 'none', 0.15);
         if (it.type === 'window') s += L((x0 + x1) / 2, y0 + fi, (x0 + x1) / 2, y1 - fi, 0.15);
+        if (it.type === 'windowSliding') { const n = Math.max(2, +it.panels || 2); for (let i = 1; i < n; i++) s += L(x0 + (w * i) / n, y0 + fi, x0 + (w * i) / n, y1 - fi, 0.15); }
         if (it.type === 'windowFixed') s += T((x0 + x1) / 2, (y0 + y1) / 2 + 0.8, 'FIX', 2.2, 'middle', 400, '#456');
       } else {
         s += R(x0, y0, w, h, '#f7f3ec', 0.3, hit);

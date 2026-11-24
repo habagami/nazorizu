@@ -24,6 +24,7 @@
     folding: { label: '折れ戸', opts: ['hinge', 'side', 'panels'], def: 800, panels: [2, 3, 4, 6] },
     folding2: { label: '両折れ戸', opts: ['side', 'panels'], def: 1600, panels: [4, 6, 8] },
     window: { label: 'ガラス窓(一般)', opts: ['sill'], def: 1690 },
+    windowSliding: { label: 'ガラス窓(引違いサッシ)', opts: ['panels', 'sill'], def: 1690, panels: [2, 3, 4] },
     windowFixed: { label: 'ガラス窓(はめ殺し)', opts: ['sill'], def: 900 },
     windowSash: { label: 'ガラス小窓(開閉)', opts: ['hinge', 'side', 'sill'], def: 600, hingeLabel: ['開き:始点側', '開き:終点側'] },
     opening: { label: '開口(建具なし)', opts: ['sill'], def: 800 },

@@ -805,7 +805,7 @@
       </div>
       <div class="seg-head">分割(始点から順に。ドア・引き戸・折れ戸・ガラス窓などを入れる)</div>
       <div class="segs"></div>
-      <div class="seg-add">${['wall', 'door', 'entrance', 'sliding', 'sliding2', 'fusuma', 'folding', 'window', 'windowFixed', 'windowSash', 'opening'].map((k) => `<button data-add="${k}">＋${NZ.SEG_TYPES[k].label}</button>`).join('')}</div>
+      <div class="seg-add">${['wall', 'door', 'entrance', 'sliding', 'sliding2', 'fusuma', 'folding', 'window', 'windowSliding', 'windowFixed', 'windowSash', 'opening'].map((k) => `<button data-add="${k}">＋${NZ.SEG_TYPES[k].label}</button>`).join('')}</div>
       <div class="seg-rest"></div>
       <svg class="preview"></svg>
       <div class="note">左右は「始点→終点」に向かって見た方向です。</div>`;
@@ -896,7 +896,10 @@
         const def = NZ.SEG_TYPES[add];
         const len = num(fv('len')) || 0;
         const sum = segs.reduce((a, g) => a + (num(g.len) || 0), 0);
-        segs.push({ type: add, len: def.def ? Math.min(def.def, Math.max(0, len - sum)) || def.def : Math.max(0, Math.round(len - sum)), hinge: 'start', side: 'right', panels: def.panels ? def.panels[0] : undefined });
+        const rest = Math.max(0, Math.round(len - sum));
+        // 窓は、残りの長さが標準の幅の2.2倍までなら、残り全部を窓にする(壁いっぱいのサッシが多いため)
+        const fill = ['window', 'windowSliding', 'windowFixed'].includes(add) && rest > 0 && rest <= def.def * 2.2;
+        segs.push({ type: add, len: fill ? rest : def.def ? Math.min(def.def, rest) || def.def : rest, hinge: 'start', side: 'right', panels: def.panels ? def.panels[0] : undefined });
         drawSegs();
         const inputs = body.querySelectorAll('.seg-row input[data-k="len"]');
         if (inputs.length) inputs[inputs.length - 1].select();
