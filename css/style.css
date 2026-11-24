@@ -436,3 +436,4 @@ label.chk input { width: 24px; height: 24px; accent-color: var(--shu); }
 .issues-ok { text-align: center; color: var(--ok); padding: 28px 10px; font-weight: 800; }
 .issues-foot { display: flex; gap: 8px; padding: 10px; border-top: 1px solid var(--line); flex-wrap: wrap; }
 .issues-foot button { flex: 1; border: 0; border-radius: 12px; height: 46px; background: var(--kinari); cursor: pointer; font-size: 14px; font-weight: 700; }
+.selbar button[disabled] { opacity: .4; }
