@@ -32,6 +32,9 @@
       else if (dv < -1e-6) d = (lo - c0) / dv;
       if (d > 0 && d < t * 2) ext = Math.max(ext, d);
     }
+    // まだ何にもつながっていない端は、あとで同じ厚みの壁と角でつながるものとして、壁厚の半分を見込む
+    // (部屋を一周描いたとき、最初の壁の始点側だけ厚み分が抜けて、最後の角がずれるのを防ぐ。新しく描いた壁だけ)
+    if (!connected && w.assumeCorner) ext = w.thick / 2;
     return { ext, connected };
   }
   NZ.wallEndExt = function (walls, w) {

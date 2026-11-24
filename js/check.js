@@ -234,7 +234,7 @@
       if (!w.traced) continue;
       const L = NZ.wallFrame(w).L;
       const diff = Math.abs(L - w.traced);
-      if (diff > Math.max(150, L * 0.08)) {
+      if (diff > Math.max(200, L * 0.1)) {
         const m = { x: (w.x1 + w.x2) / 2, y: (w.y1 + w.y2) / 2 };
         push({ level: 'warn', kind: 'traced', ids: [w.id], x: m.x, y: m.y, msg: `入力値 ${R(L)}mm が下図の長さ(約${R(w.traced)}mm)と ${R(diff)}mm 違います。入力ミス(数字の入れ替わり等)がないか確認してください。` });
       }

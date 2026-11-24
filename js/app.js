@@ -137,7 +137,7 @@
     } else {
       b = NZ.annotatedBBox(P(), st.S);
       const u = P().underlay;
-      if (u && u.visible && !P().walls.length) b = { x0: u.x, y0: u.y, x1: u.x + u.w * u.mmPerPx, y1: u.y + u.h * u.mmPerPx };
+      if (u && u.visible && !P().walls.length) b = { x0: u.x, y0: u.y, x1: u.x + u.w * u.mmPerPx, y1: u.y + u.h * (u.mmPerPxY || u.mmPerPx) };
     }
     v.cx = (b.x0 + b.x1) / 2; v.cy = (b.y0 + b.y1) / 2;
     v.zoom = Math.min((r.width - 40) / (b.x1 - b.x0), (r.height - 40) / (b.y1 - b.y0));
@@ -150,7 +150,7 @@
     if (st.mode !== 'draw' || !u || !u.src || !u.visible || !$('#lay-under').checked) { g.innerHTML = ''; return; }
     // 下図は薄い青で表示し、自分で引いた線(墨色)と見分けやすくする
     g.innerHTML = `<filter id="under-tint" color-interpolation-filters="sRGB"><feColorMatrix type="matrix" values="0.213 0.419 0.078 0 0.29  0.132 0.260 0.048 0 0.56  0.045 0.089 0.017 0 0.85  0 0 0 1 0"/></filter>`
-      + `<image href="${u.src}" x="${u.x}" y="${u.y}" width="${u.w * u.mmPerPx}" height="${u.h * u.mmPerPx}" opacity="${u.opacity}" preserveAspectRatio="none" filter="url(#under-tint)"/>`;
+      + `<image href="${u.src}" x="${u.x}" y="${u.y}" width="${u.w * u.mmPerPx}" height="${u.h * (u.mmPerPxY || u.mmPerPx)}" opacity="${u.opacity}" preserveAspectRatio="none" filter="url(#under-tint)"/>`;
   }
   function renderAll() {
     st.S = NZ.sheetScale(P());
@@ -191,8 +191,10 @@
           const q = (s0, k) => ({ x: e.x1 + fr.u.x * s0 + fr.n.x * k, y: e.y1 + fr.u.y * s0 + fr.n.y * k });
           const pts = [q(0, off - t / 2), q(fr.L, off - t / 2), q(fr.L, off + t / 2), q(0, off + t / 2)];
           s += `<polygon points="${pts.map((p) => `${r2(p.x)},${r2(p.y)}`).join(' ')}" ${sty} fill-opacity=".1"/>`;
-          s += `<circle cx="${e.x1}" cy="${e.y1}" r="${px(11)}" fill="#fff" stroke="#E2552D" stroke-width="${px(2.5)}"/>`;
-          s += `<circle cx="${e.x2}" cy="${e.y2}" r="${px(11)}" fill="#E2552D" stroke="#fff" stroke-width="${px(2)}"/>`;
+          const dash = (k) => (e['free' + k] ? ` stroke-dasharray="${px(3)} ${px(3)}"` : '');
+          s += `<circle cx="${e.x1}" cy="${e.y1}" r="${px(11)}" fill="#fff" stroke="#E2552D" stroke-width="${px(2.5)}"${dash(1)}/>`;
+          s += `<circle cx="${e.x2}" cy="${e.y2}" r="${px(11)}" fill="${e.free2 ? '#fff' : '#E2552D'}" stroke="${e.free2 ? '#E2552D' : '#fff'}" stroke-width="${px(e.free2 ? 2.5 : 2)}"${dash(2)}/>`;
+          if (e.free1 || e.free2) s += `<text x="${(e.x1 + e.x2) / 2}" y="${(e.y1 + e.y2) / 2 - 22 / z}" font-size="${px(12)}" text-anchor="middle" fill="#E2552D">切り離し中</text>`;
           s += `<text x="${e.x1}" y="${e.y1 - 16 / z}" font-size="${px(12)}" text-anchor="middle" fill="#E2552D">始点</text>`;
         } else {
           const b = elBBox(f);
@@ -407,7 +409,8 @@
   // ---------- 入力(ペン/指) ----------
   const pointers = new Map();
   let gesture = null, action = null, lastTap = { t: 0, id: null }, lastPointerType = 'mouse';
-  let insertWall = null; // 「建具を入れる」で、窓・扉にする範囲をなぞっている壁
+  let insertWall = null; // 「窓・扉を入れる」で、窓・扉にする範囲を決めている壁
+  let insertPick = null; // 1点目(壁の始点からの距離 s と、その点)
   let spaceDown = false;
 
   cv.addEventListener('pointerdown', (e) => {
@@ -515,9 +518,10 @@
     photo: '写真を撮った所をタップ',
     zone: 'キッチン・トイレ・浴室の範囲を囲む',
     calib: '長さの分かる所をなぞる → 実寸を入れる',
+    opening: '壁の上で、窓・扉の両端を1点ずつタップ(なぞってもよい)',
   };
   function setTool(t) {
-    insertWall = null;
+    insertWall = null; insertPick = null;
     st.tool = t;
     st.temp = null;
     if (t !== 'select') st.welcomeOff = true;
@@ -529,7 +533,7 @@
 
   function toolDown(p) {
     const t = st.tool;
-    if (insertWall) { st.temp = { pts: [p] }; renderOverlay(); return; }
+    if (insertWall || t === 'opening') { st.temp = Object.assign({}, insertPick ? { snap: insertPick.pt } : {}, { pts: [p] }); renderOverlay(); return; }
     if (t === 'select') {
       // 選択中の壁の端点を優先
       const z = view().zoom;
@@ -594,10 +598,10 @@
   }
   function toolMove(p) {
     const t = st.tool;
-    if (insertWall && st.temp && st.temp.pts) {
+    if ((insertWall || t === 'opening') && st.temp && st.temp.pts) {
       st.temp.pts.push(p);
-      const fr = NZ.wallFrame(insertWall), pr = (q) => (q.x - insertWall.x1) * fr.u.x + (q.y - insertWall.y1) * fr.u.y;
-      st.temp.label = { x: p.x, y: p.y - 30 / view().zoom, text: `≈${Math.round(Math.abs(pr(p) - pr(st.temp.pts[0])))}` };
+      const a0 = st.temp.pts[0];
+      st.temp.label = { x: p.x, y: p.y - 30 / view().zoom, text: `≈${Math.round(Math.hypot(p.x - a0.x, p.y - a0.y))}` };
       renderOverlay();
       return;
     }
@@ -675,8 +679,14 @@
   function toolUp(p, a, e) {
     const t = st.tool;
     const scrLen = Math.hypot(e.clientX - a.startScr.x, e.clientY - a.startScr.y);
-    if (insertWall) {
-      if (scrLen < 14) { insertWall = null; st.temp = null; $('#hint').textContent = HINTS[st.tool] || ''; renderOverlay(); toast('建具を入れるのをやめました'); return; }
+    if (insertWall || t === 'opening') {
+      if (scrLen < 14) { handleInsertTap(p, e); return; }
+      if (!insertWall) {
+        const mid = a.pts[Math.floor(a.pts.length / 2)];
+        insertWall = wallNear(mid);
+        if (!insertWall) { st.temp = null; renderOverlay(); toast('壁の上をなぞってください'); return; }
+      }
+      insertPick = null;
       handleInsertStroke(a.pts, e);
       return;
     }
@@ -728,14 +738,43 @@
   }
   // ---------- 壁の一部を窓・扉にする(壁の上をなぞる) ----------
   function startInsert(w) {
-    insertWall = w;
+    insertWall = w; insertPick = null;
     st.temp = null;
-    $('#hint').textContent = '窓・扉にしたい範囲を、壁の上でなぞってください(タップでやめる)';
+    $('#hint').textContent = 'この壁の上で、窓・扉の両端を1点ずつタップ(なぞってもよい)';
     renderOverlay();
+  }
+  // 点の近くの壁(指は広めに拾う)
+  function wallNear(p) {
+    const tol = (lastPointerType === 'touch' ? 28 : 14) / view().zoom;
+    let best = null, bd = Infinity;
+    for (const w of P().walls) { const d = wallFaceDist(w, p); if (d < tol && d < bd) { bd = d; best = w; } }
+    return best;
+  }
+  // 壁に点を打つ: 1点目 → 2点目 で、その間を窓・扉にする
+  function handleInsertTap(p, e) {
+    const near = wallNear(p);
+    if (!insertPick) {
+      const w = insertWall && (!near || near === insertWall) ? insertWall : near;
+      if (!w || (insertWall && near && near !== insertWall)) {
+        if (insertWall && st.tool !== 'opening') { insertWall = null; $('#hint').textContent = HINTS[st.tool] || ''; st.temp = null; renderOverlay(); toast('窓・扉を入れるのをやめました'); return; }
+        st.temp = null; renderOverlay(); toast('壁の上をタップしてください'); return;
+      }
+      const fr = NZ.wallFrame(w), s = (p.x - w.x1) * fr.u.x + (p.y - w.y1) * fr.u.y;
+      const pt = { x: w.x1 + fr.u.x * s, y: w.y1 + fr.u.y * s };
+      insertWall = w; insertPick = { s, pt };
+      st.temp = { snap: pt, label: { x: pt.x, y: pt.y - 30 / view().zoom, text: '1点目' } };
+      $('#hint').textContent = '同じ壁の上で、もう一方の端をタップ';
+      renderOverlay();
+      return;
+    }
+    if (near && near !== insertWall) { toast('1点目と同じ壁の上をタップしてください'); return; }
+    const w = insertWall, A = insertPick.pt;
+    insertPick = null;
+    handleInsertStroke([A, p], e);
   }
   function handleInsertStroke(pts, e) {
     const w = insertWall;
-    insertWall = null;
+    insertWall = null; insertPick = null;
     $('#hint').textContent = HINTS[st.tool] || '';
     const fr = NZ.wallFrame(w), [i0, i1] = NZ.wallInset(w);
     const pr = (q) => (q.x - w.x1) * fr.u.x + (q.y - w.y1) * fr.u.y;
@@ -1087,7 +1126,11 @@
       if (inner) props.inner = len; else delete w.inner;
       const cl = centerLen(len);
       if (o.isNew) {
-        Object.assign(w, props, { anchor: 'start', x2: w.x1 + fr.u.x * cl, y2: w.y1 + fr.u.y * cl });
+        // つながっていない端は、角で同じ厚みの壁とつながる見込み(壁厚の半分)を足した長さで比べる
+        const clFit = inner ? cl + (ex.c0 ? 0 : thick / 2) + (ex.c1 ? 0 : thick / 2) : cl;
+        const fitMsg = fitUnderlayToWall(w, fr, clFit, o.measured);
+        if (fitMsg) { setTimeout(() => toast(fitMsg), 0); w.traced = Math.round(clFit); }
+        Object.assign(w, props, { anchor: 'start', assumeCorner: true, x2: w.x1 + fr.u.x * cl, y2: w.y1 + fr.u.y * cl });
         P().walls.push(w);
         st.temp = null;
         st.sel = null;
@@ -1150,6 +1193,30 @@
     focusFirst(dlg.dlg);
   }
 
+  // ---------- 下図の縮尺を、最初に入れた壁の寸法に自動で合わせる ----------
+  // 下図(写真・スキャン・PDF)は縮尺がずれていたり、縦と横で縮み方が違ったりする。
+  // 横向きの壁・縦向きの壁それぞれ、図面で最初の1本の「入れた寸法」と「なぞった長さ」の比で、その向きの縮尺を直す。
+  // 直すときは壁の始点を中心に伸び縮みさせるので、なぞった壁の下に下図の線が来る。
+  function fitUnderlayToWall(w, fr, cl, measured) {
+    const u = P().underlay;
+    if (!u || !u.src || !u.visible || !(measured > 300) || !(cl > 0)) return null;
+    const ax = Math.abs(fr.u.x) > 0.94 ? 'x' : Math.abs(fr.u.y) > 0.94 ? 'y' : null;
+    if (!ax) return null;
+    u.fitAxes = u.fitAxes || {};
+    if (u.fitAxes[ax]) return null;
+    // すでにこの向きの壁(確定済み)がある図面では、勝手に動かさない
+    const same = P().walls.some((o) => !o.detected && o !== w && (ax === 'x' ? Math.abs(NZ.wallFrame(o).u.x) > 0.94 : Math.abs(NZ.wallFrame(o).u.y) > 0.94));
+    if (same) return null;
+    u.fitAxes[ax] = true;
+    const k = cl / measured;
+    if (Math.abs(k - 1) < 0.02 || Math.abs(k - 1) > 0.6) return null; // 2%未満は合っている、60%超は入力ミスの疑い
+    if (ax === 'x') { u.x = w.x1 - (w.x1 - u.x) * k; u.mmPerPx *= k; if (!u.mmPerPxY) u.mmPerPxY = u.mmPerPx / k; }
+    else { const my = u.mmPerPxY || u.mmPerPx; u.y = w.y1 - (w.y1 - u.y) * k; u.mmPerPxY = my * k; }
+    u.calibrated = true;
+    renderUnderlay();
+    return `下図の${ax === 'x' ? '横' : '縦'}の縮尺を、入れた寸法に合わせました(${k > 1 ? '+' : ''}${Math.round((k - 1) * 100)}%)`;
+  }
+
   // ---------- 縮尺合わせ ----------
   function handleCalib(pts, e) {
     const u = P().underlay;
@@ -1183,6 +1250,7 @@
     const u = P().underlay;
     const ox = u.x, oy = u.y;
     u.mmPerPx *= k;
+    if (u.mmPerPxY) u.mmPerPxY *= k;
     u.calibrated = true;
     if (scaleAll) scaleModel(ox, oy, k);
     renderUnderlay();
@@ -1440,9 +1508,9 @@
     if (f.coll === 'photos') { title = `写真 No.${e.no}${e.note ? ' ' + e.note : ''}`; btns.unshift(['view', '写真を見る']); btns.push(['rot', '向き45°']); }
     if (f.coll === 'walls' && e.innerMode) title = `${(NZ.WALL_KINDS[e.kind] || {}).label || '壁'} 内法${Math.round(e.inner)}mm`;
     if (f.coll === 'walls') {
-      btns.push(['insert', '建具を入れる'], ['flip', '向き反転'], ['measure', '写真で測る']);
       if (e.free1 || e.free2) btns.push(['join', 'つなぎ直す']);
       else if (wallTouches(e)) btns.push(['detach', '切り離す']);
+      btns.push(['insert', '窓・扉を入れる'], ['flip', '向き反転'], ['measure', '写真で測る']);
       // 壁いっぱいの建具は、壁ではなく建具の名前で表示する
       const op = fullOpening(e);
       if (op) title = `${op} ${Math.round(e.innerMode ? e.inner : NZ.wallFrame(e).L)}mm`;
@@ -1720,7 +1788,7 @@
   }
 
   // ---------- 検出結果の取り込み ----------
-  const pxToMm = (u, x, y) => ({ x: u.x + x * u.mmPerPx, y: u.y + y * u.mmPerPx });
+  const pxToMm = (u, x, y) => ({ x: u.x + x * u.mmPerPx, y: u.y + y * (u.mmPerPxY || u.mmPerPx) });
   const r5 = (v) => Math.max(50, Math.round(v / 5) * 5);
 
   // 検出した壁の端点を、交差する壁の中心線に合わせて角をつなぐ

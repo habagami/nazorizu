@@ -391,7 +391,7 @@
     if (p.grid && p.grid.visible) { for (const x of p.grid.xs) add(x, isFinite(y0) ? y0 : 0); for (const y of p.grid.ys) add(isFinite(x0) ? x0 : 0, y); }
     if (!isFinite(x0)) {
       const u = p.underlay;
-      if (u) return { x0: u.x, y0: u.y, x1: u.x + u.w * u.mmPerPx, y1: u.y + u.h * u.mmPerPx };
+      if (u) return { x0: u.x, y0: u.y, x1: u.x + u.w * u.mmPerPx, y1: u.y + u.h * (u.mmPerPxY || u.mmPerPx) };
       return { x0: 0, y0: 0, x1: 10000, y1: 7000 };
     }
     return { x0, y0, x1, y1 };
