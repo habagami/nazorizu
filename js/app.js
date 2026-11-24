@@ -392,10 +392,11 @@
   // 壁端点を移動(接続している他の壁の端点も追従)
   function moveWallEnd(w, which, np) {
     const ox = which === 1 ? w.x1 : w.x2, oy = which === 1 ? w.y1 : w.y2;
-    for (const o of P().walls) {
+    // 「切り離す」を押した端(free1/free2)は、ほかの壁を連れて動かさない・連れて動かされない
+    if (!w['free' + which]) for (const o of P().walls) {
       if (o === w) continue;
-      if (Math.hypot(o.x1 - ox, o.y1 - oy) < 2) { o.x1 = np.x; o.y1 = np.y; }
-      if (Math.hypot(o.x2 - ox, o.y2 - oy) < 2) { o.x2 = np.x; o.y2 = np.y; }
+      if (!o.free1 && Math.hypot(o.x1 - ox, o.y1 - oy) < 2) { o.x1 = np.x; o.y1 = np.y; }
+      if (!o.free2 && Math.hypot(o.x2 - ox, o.y2 - oy) < 2) { o.x2 = np.x; o.y2 = np.y; }
     }
     if (which === 1) { w.x1 = np.x; w.y1 = np.y; } else { w.x2 = np.x; w.y2 = np.y; }
   }
@@ -547,13 +548,24 @@
     }
     renderOverlay();
   }
+  // ほかの壁の端とつながっているか
+  function wallTouches(w) {
+    return P().walls.some((o) => o !== w && [[o.x1, o.y1], [o.x2, o.y2]].some(([x, y]) => Math.hypot(x - w.x1, y - w.y1) < 2 || Math.hypot(x - w.x2, y - w.y2) < 2));
+  }
+  // 壁いっぱいに扉・窓が入っている(壁の部分がない)ときは、その建具の名前を返す
+  function fullOpening(w) {
+    const segs = NZ.resolveSegments(w).filter((g) => !g.hidden && g.len > 0.5);
+    if (!segs.length || segs.some((g) => g.type === 'wall')) return null;
+    return [...new Set(segs.map((g) => (NZ.SEG_TYPES[g.type] || {}).label || '建具'))].join('・');
+  }
   function attachedEnds(w) {
     const r = [];
     for (const o of P().walls) {
       if (o === w) continue;
       for (const k of [1, 2]) {
+        if (o['free' + k]) continue;
         const ox = k === 1 ? o.x1 : o.x2, oy = k === 1 ? o.y1 : o.y2;
-        if (Math.hypot(ox - w.x1, oy - w.y1) < 2 || Math.hypot(ox - w.x2, oy - w.y2) < 2) r.push({ o, k, x: ox, y: oy });
+        if ((!w.free1 && Math.hypot(ox - w.x1, oy - w.y1) < 2) || (!w.free2 && Math.hypot(ox - w.x2, oy - w.y2) < 2)) r.push({ o, k, x: ox, y: oy });
       }
     }
     return r;
@@ -625,6 +637,7 @@
     const scrLen = Math.hypot(e.clientX - a.startScr.x, e.clientY - a.startScr.y);
     if (t === 'select') {
       if (a.drag && a.moved) {
+        if (a.drag.kind === 'end' && st.temp && st.temp.snap) delete a.drag.w['free' + a.drag.which];
         st.temp = null; // 吸着の印を消す
         // 手で壁を動かした場合は、動かした形を正として内法を取り直す
         if (a.drag.kind === 'end' || a.drag.f.coll === 'walls') NZ.syncInner(P());
@@ -915,6 +928,17 @@
       if (!(len > 0) || !(thick > 0) || !(height > 0)) { toast('長さ・壁厚・壁高を正しく入力してください'); return false; }
       const segsOut = segs.map((g) => Object.assign({}, g, { len: num(g.len) || 0 })).filter((g) => g.len > 0);
       if (segsOut.reduce((a, g) => a + g.len, 0) > len + 0.5) { toast('分割の合計が全長を超えています'); return false; }
+      // 扉・窓で壁がほぼ埋まっている(残りの壁が30mm以下)ときは、壁の部分を消して、建具を壁いっぱいにする
+      let fullOpen = false;
+      {
+        const ops = segsOut.filter((g) => g.type !== 'wall');
+        const wallLeft = len - ops.reduce((a, g) => a + g.len, 0);
+        if (ops.length && wallLeft <= 30 && wallLeft > -0.5) {
+          for (let i = segsOut.length - 1; i >= 0; i--) if (segsOut[i].type === 'wall') segsOut.splice(i, 1);
+          segsOut[segsOut.length - 1].len += Math.max(0, wallLeft);
+          fullOpen = true;
+        }
+      }
       // 建具の高さ・腰高(空欄=標準値)
       for (const g of segsOut) {
         for (const k of ['ht', 'bot']) {
@@ -932,6 +956,7 @@
       const fr = NZ.wallFrame(w);
       Object.assign(st.last, { kind: fv('kind'), thick, just: fv('just') });
       const props = { thick, height, kind: fv('kind'), just: fv('just'), dim: fv('dim'), segments: segsOut, innerMode: inner };
+      if (fullOpen) setTimeout(() => toast('壁いっぱいの建具にしました(壁の部分はありません)'), 0);
       if (inner) props.inner = len; else delete w.inner;
       const cl = centerLen(len);
       if (o.isNew) {
@@ -1287,7 +1312,14 @@
     if (f.coll === 'fixtures') btns.push(['rot', '回転90°']);
     if (f.coll === 'photos') { title = `写真 No.${e.no}${e.note ? ' ' + e.note : ''}`; btns.unshift(['view', '写真を見る']); btns.push(['rot', '向き45°']); }
     if (f.coll === 'walls' && e.innerMode) title = `${(NZ.WALL_KINDS[e.kind] || {}).label || '壁'} 内法${Math.round(e.inner)}mm`;
-    if (f.coll === 'walls') btns.push(['flip', '向き反転'], ['measure', '写真で測る']);
+    if (f.coll === 'walls') {
+      btns.push(['flip', '向き反転'], ['measure', '写真で測る']);
+      if (e.free1 || e.free2) btns.push(['join', 'つなぎ直す']);
+      else if (wallTouches(e)) btns.push(['detach', '切り離す']);
+      // 壁いっぱいの建具は、壁ではなく建具の名前で表示する
+      const op = fullOpening(e);
+      if (op) title = `${op} ${Math.round(e.innerMode ? e.inner : NZ.wallFrame(e).L)}mm`;
+    }
     if (['fixtures', 'columns', 'walls', 'labels', 'floors'].includes(f.coll)) btns.push(['dup', '複製']);
     btns.push(['del', '削除']);
     bar.innerHTML = `<span class="sel-title">${esc(title)}${e.detected ? '(未確定)' : ''}</span>` + btns.map(([k, l]) => `<button data-sa="${k}" class="${k === 'del' ? 'danger' : ''}">${l}</button>`).join('');
@@ -1304,6 +1336,8 @@
     if (a === 'rot') { e.rot = ((e.rot || 0) + (f.coll === 'photos' ? 45 : 90)) % 360; commit(); }
     if (a === 'view') viewPhoto(e);
     if (a === 'measure') NZ.photoMeasure(e);
+    if (a === 'detach') { e.free1 = true; e.free2 = true; commit(); toast('切り離しました。この壁の端の丸を引くと、この壁だけが動きます'); }
+    if (a === 'join') { delete e.free1; delete e.free2; commit(); toast('つなぎ直しました。端を動かすと、つながっている壁も一緒に動きます'); }
     if (a === 'flip') {
       [e.x1, e.y1, e.x2, e.y2] = [e.x2, e.y2, e.x1, e.y1];
       e.segments = (e.segments || []).slice().reverse().map((g) => Object.assign({}, g, { hinge: g.hinge === 'end' ? 'start' : 'end', side: g.side === 'left' ? 'right' : 'left' }));
