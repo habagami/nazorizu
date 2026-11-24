@@ -10,6 +10,7 @@
    * @returns {ext, connected}
    */
   function endExt(walls, w, which) {
+    if (w['free' + which]) return { ext: 0, connected: false }; // 「切り離す」を押した端
     const fr = NZ.wallFrame(w);
     const e = which === 1 ? { x: w.x1, y: w.y1 } : { x: w.x2, y: w.y2 };
     const v = which === 1 ? fr.u : { x: -fr.u.x, y: -fr.u.y }; // 壁の内側へ向かう向き

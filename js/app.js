@@ -197,6 +197,9 @@
         } else {
           const b = elBBox(f);
           s += `<rect x="${r2(b.x0)}" y="${r2(b.y0)}" width="${r2(b.x1 - b.x0)}" height="${r2(b.y1 - b.y0)}" ${sty} stroke-dasharray="${px(6)} ${px(4)}"/>`;
+          if (f.coll === 'floors' || f.coll === 'zones') {
+            for (const h of rectHandles(e)) s += `<circle cx="${r2(h.x)}" cy="${r2(h.y)}" r="${px(h.k.length === 2 ? 11 : 9)}" fill="#fff" stroke="#E2552D" stroke-width="${px(2.5)}"/>`;
+          }
         }
       }
     }
@@ -404,6 +407,7 @@
   // ---------- 入力(ペン/指) ----------
   const pointers = new Map();
   let gesture = null, action = null, lastTap = { t: 0, id: null }, lastPointerType = 'mouse';
+  let insertWall = null; // 「建具を入れる」で、窓・扉にする範囲をなぞっている壁
   let spaceDown = false;
 
   cv.addEventListener('pointerdown', (e) => {
@@ -513,6 +517,7 @@
     calib: '長さの分かる所をなぞる → 実寸を入れる',
   };
   function setTool(t) {
+    insertWall = null;
     st.tool = t;
     st.temp = null;
     if (t !== 'select') st.welcomeOff = true;
@@ -524,6 +529,7 @@
 
   function toolDown(p) {
     const t = st.tool;
+    if (insertWall) { st.temp = { pts: [p] }; renderOverlay(); return; }
     if (t === 'select') {
       // 選択中の壁の端点を優先
       const z = view().zoom;
@@ -533,6 +539,14 @@
           const w = f.el;
           if (Math.hypot(p.x - w.x1, p.y - w.y1) < 22 / z) { action.drag = { kind: 'end', which: 1, w }; return; }
           if (Math.hypot(p.x - w.x2, p.y - w.y2) < 22 / z) { action.drag = { kind: 'end', which: 2, w }; return; }
+        }
+      }
+      if (st.sel) {
+        const f = findEl(st.sel);
+        if (f && (f.coll === 'floors' || f.coll === 'zones')) {
+          const tolH = (lastPointerType === 'touch' ? 30 : 18) / z;
+          const h = rectHandles(f.el).find((q) => Math.hypot(p.x - q.x, p.y - q.y) < tolH);
+          if (h) { action.drag = { kind: 'rect', f, h: h.k, orig: { x: f.el.x, y: f.el.y, w: f.el.w, h: f.el.h } }; action.hit = f.el.id; return; }
         }
       }
       const id = hitTest(p);
@@ -548,9 +562,17 @@
     }
     renderOverlay();
   }
+  // 床・範囲の四角に付ける点(四隅=2文字、各辺の中央=1文字)
+  function rectHandles(e) {
+    const x0 = e.x, y0 = e.y, x1 = e.x + e.w, y1 = e.y + e.h, mx = (x0 + x1) / 2, my = (y0 + y1) / 2;
+    return [{ k: 'nw', x: x0, y: y0 }, { k: 'ne', x: x1, y: y0 }, { k: 'se', x: x1, y: y1 }, { k: 'sw', x: x0, y: y1 },
+      { k: 'n', x: mx, y: y0 }, { k: 'e', x: x1, y: my }, { k: 's', x: mx, y: y1 }, { k: 'w', x: x0, y: my }];
+  }
   // ほかの壁の端とつながっているか
   function wallTouches(w) {
-    return P().walls.some((o) => o !== w && [[o.x1, o.y1], [o.x2, o.y2]].some(([x, y]) => Math.hypot(x - w.x1, y - w.y1) < 2 || Math.hypot(x - w.x2, y - w.y2) < 2));
+    if (P().walls.some((o) => o !== w && [[o.x1, o.y1], [o.x2, o.y2]].some(([x, y]) => Math.hypot(x - w.x1, y - w.y1) < 2 || Math.hypot(x - w.x2, y - w.y2) < 2))) return true;
+    const r = NZ.wallEndExt(P().walls.filter((o) => o !== w), w); // T字(壁の途中に突き当たる)
+    return r.c0 || r.c1;
   }
   // 壁いっぱいに扉・窓が入っている(壁の部分がない)ときは、その建具の名前を返す
   function fullOpening(w) {
@@ -572,9 +594,27 @@
   }
   function toolMove(p) {
     const t = st.tool;
+    if (insertWall && st.temp && st.temp.pts) {
+      st.temp.pts.push(p);
+      const fr = NZ.wallFrame(insertWall), pr = (q) => (q.x - insertWall.x1) * fr.u.x + (q.y - insertWall.y1) * fr.u.y;
+      st.temp.label = { x: p.x, y: p.y - 30 / view().zoom, text: `≈${Math.round(Math.abs(pr(p) - pr(st.temp.pts[0])))}` };
+      renderOverlay();
+      return;
+    }
     if (t === 'select' && action.drag && action.moved) {
       const d = action.drag;
-      if (d.kind === 'end') {
+      if (d.kind === 'rect') {
+        // 床・範囲の点を引く: 壁の角・面に吸着しながら、その辺だけを動かす
+        const sp = snapPoint(p);
+        const q = sp || p, o = d.orig, MIN = 100;
+        let x0 = o.x, y0 = o.y, x1 = o.x + o.w, y1 = o.y + o.h;
+        if (d.h.includes('w')) x0 = Math.min(q.x, x1 - MIN);
+        if (d.h.includes('e')) x1 = Math.max(q.x, x0 + MIN);
+        if (d.h.includes('n')) y0 = Math.min(q.y, y1 - MIN);
+        if (d.h.includes('s')) y1 = Math.max(q.y, y0 + MIN);
+        Object.assign(d.f.el, { x: x0, y: y0, w: x1 - x0, h: y1 - y0 });
+        st.temp = { snap: sp, label: { x: (x0 + x1) / 2, y: y0 - 20 / view().zoom, text: `${Math.round(x1 - x0)} × ${Math.round(y1 - y0)}` } };
+      } else if (d.kind === 'end') {
         let sp = snapPoint(p, d.w.id, true);
         let np = sp || p;
         const other = d.which === 1 ? { x: d.w.x2, y: d.w.y2 } : { x: d.w.x1, y: d.w.y1 };
@@ -583,7 +623,7 @@
           const dir = orthoDir({ x: (np.x - other.x) / L, y: (np.y - other.y) / L });
           np = { x: other.x + dir.x * L, y: other.y + dir.y * L };
         }
-        if (!sp) {
+        if (!sp && !d.w['free' + d.which]) {
           // 柱の面、または他の壁(T字につながる位置)に合わせる
           const L = Math.hypot(np.x - other.x, np.y - other.y) || 1, dir = { x: (np.x - other.x) / L, y: (np.y - other.y) / L };
           const cp = snapEndToColumn(np, dir, null);
@@ -635,12 +675,17 @@
   function toolUp(p, a, e) {
     const t = st.tool;
     const scrLen = Math.hypot(e.clientX - a.startScr.x, e.clientY - a.startScr.y);
+    if (insertWall) {
+      if (scrLen < 14) { insertWall = null; st.temp = null; $('#hint').textContent = HINTS[st.tool] || ''; renderOverlay(); toast('建具を入れるのをやめました'); return; }
+      handleInsertStroke(a.pts, e);
+      return;
+    }
     if (t === 'select') {
       if (a.drag && a.moved) {
         if (a.drag.kind === 'end' && st.temp && st.temp.snap) delete a.drag.w['free' + a.drag.which];
         st.temp = null; // 吸着の印を消す
         // 手で壁を動かした場合は、動かした形を正として内法を取り直す
-        if (a.drag.kind === 'end' || a.drag.f.coll === 'walls') NZ.syncInner(P());
+        if (a.drag.kind === 'end' || (a.drag.f && a.drag.f.coll === 'walls')) NZ.syncInner(P());
         commit();
         return;
       }
@@ -681,6 +726,88 @@
     if (t === 'text') { labelDialog(null, p, e); return; }
     if (t === 'photo') { photoDialog(null, p); return; }
   }
+  // ---------- 壁の一部を窓・扉にする(壁の上をなぞる) ----------
+  function startInsert(w) {
+    insertWall = w;
+    st.temp = null;
+    $('#hint').textContent = '窓・扉にしたい範囲を、壁の上でなぞってください(タップでやめる)';
+    renderOverlay();
+  }
+  function handleInsertStroke(pts, e) {
+    const w = insertWall;
+    insertWall = null;
+    $('#hint').textContent = HINTS[st.tool] || '';
+    const fr = NZ.wallFrame(w), [i0, i1] = NZ.wallInset(w);
+    const pr = (q) => (q.x - w.x1) * fr.u.x + (q.y - w.y1) * fr.u.y;
+    const span = fr.L - i0 - i1;
+    let a = pr(pts[0]) - i0, b = pr(pts[pts.length - 1]) - i0;
+    if (a > b) [a, b] = [b, a];
+    a = Math.max(0, Math.min(span, a)); b = Math.max(0, Math.min(span, b));
+    // 壁の端・ほかの建具の境目の近く(画面で約20px)なら、そこに合わせる
+    const tol = Math.max(30, 20 / view().zoom);
+    const edges = [0, span];
+    for (const g of NZ.resolveSegments(w)) if (!g.hidden) edges.push(g.s0 - i0, g.s1 - i0);
+    for (const x of edges) { if (Math.abs(a - x) < tol) a = x; if (Math.abs(b - x) < tol) b = x; }
+    st.temp = null; renderOverlay();
+    if (b - a < 100) { toast('もう少し長く、壁の上をなぞってください'); return; }
+    insertDialog(w, Math.round(a), Math.round(b - a), e, span);
+  }
+  function insertDialog(w, pos, width, anchor, span) {
+    const types = Object.entries(NZ.SEG_TYPES).filter(([k]) => k !== 'wall');
+    const t0 = st.last.insertType && NZ.SEG_TYPES[st.last.insertType] ? st.last.insertType : 'windowSliding';
+    const dlg = openDialog({
+      title: '壁に建具を入れる', anchor,
+      html: `<div class="row"><label class="f">種類<select name="type">${types.map(([k, v]) => `<option value="${k}" ${k === t0 ? 'selected' : ''}>${v.label}</option>`).join('')}</select></label></div>
+        <div class="row"><label class="f">幅 (mm)<input name="w" class="big" inputmode="decimal" value="${width}"></label><label class="f">始点からの位置 (mm)<input name="pos" class="big" inputmode="decimal" value="${pos}"></label></div>
+        <div class="note">壁の長さ(内法) ${Math.round(span)} mm。なぞった範囲だけが建具になり、残りは壁のままです。枚数・高さなどは、あとで壁の「編集」で直せます。</div>`,
+      buttons: [
+        { label: 'キャンセル' },
+        { label: 'OK', cls: 'primary', onClick: (d) => {
+          const type = d.querySelector('[name=type]').value, wd = num(d.querySelector('[name=w]').value), ps = num(d.querySelector('[name=pos]').value);
+          if (!(wd > 0) || !(ps >= 0)) { toast('幅と位置を数値で入力してください'); return false; }
+          if (ps + wd > span + 0.5) { toast(`位置+幅が壁の長さ ${Math.round(span)} mm を超えています`); return false; }
+          if (!insertOpening(w, type, ps, wd)) return false;
+          st.last.insertType = type;
+        } },
+      ],
+    });
+    focusFirst(dlg.dlg);
+  }
+  // 壁の分割に、位置 A〜A+W の建具を差し込む(その範囲の壁は消える)
+  function insertOpening(w, type, A, W) {
+    const [i0] = NZ.wallInset(w);
+    const B = A + W;
+    const cur = NZ.resolveSegments(w).filter((g) => !g.hidden).map((g) => Object.assign({}, g, { s0: g.s0 - i0, s1: g.s1 - i0 }));
+    if (cur.some((g) => g.type !== 'wall' && g.s0 < B - 0.5 && g.s1 > A + 0.5)) { toast('ほかの扉・窓と重なっています。位置か幅を直してください'); return false; }
+    const def = NZ.SEG_TYPES[type];
+    const add = { type, len: W, hinge: 'start', side: 'right', panels: def.panels ? def.panels[0] : undefined };
+    const clean = (g, len) => { const c = Object.assign({}, g, { len }); delete c.s0; delete c.s1; delete c.auto; delete c.hidden; return c; };
+    const out = [];
+    let done = false;
+    for (const g of cur) {
+      if (g.type !== 'wall' || g.s1 <= A + 0.5 || g.s0 >= B - 0.5) {
+        if (!done && g.s0 >= B - 0.5) { out.push(add); done = true; }
+        out.push(clean(g, g.len));
+        continue;
+      }
+      if (g.s0 < A - 0.5) out.push(clean(g, A - g.s0));
+      if (!done) { out.push(add); done = true; }
+      if (g.s1 > B + 0.5) out.push(clean(g, g.s1 - B));
+    }
+    if (!done) out.push(add);
+    // 壁の部分がほぼ残らない(30mm以下)なら、壁いっぱいの建具にする
+    const walls = out.filter((g) => g.type === 'wall').reduce((s, g) => s + g.len, 0);
+    let segs = out.filter((g) => g.len > 0.5);
+    if (walls <= 30 && segs.some((g) => g.type !== 'wall')) {
+      segs = segs.filter((g) => g.type !== 'wall');
+      segs[segs.length - 1].len += walls;
+    }
+    w.segments = segs;
+    commit();
+    toast(`${def.label} ${Math.round(W)} mm を入れました`);
+    return true;
+  }
+
   function selectAt(p) {
     st.sel = hitTest(p);
     renderOverlay(); renderSelbar();
@@ -1313,7 +1440,7 @@
     if (f.coll === 'photos') { title = `写真 No.${e.no}${e.note ? ' ' + e.note : ''}`; btns.unshift(['view', '写真を見る']); btns.push(['rot', '向き45°']); }
     if (f.coll === 'walls' && e.innerMode) title = `${(NZ.WALL_KINDS[e.kind] || {}).label || '壁'} 内法${Math.round(e.inner)}mm`;
     if (f.coll === 'walls') {
-      btns.push(['flip', '向き反転'], ['measure', '写真で測る']);
+      btns.push(['insert', '建具を入れる'], ['flip', '向き反転'], ['measure', '写真で測る']);
       if (e.free1 || e.free2) btns.push(['join', 'つなぎ直す']);
       else if (wallTouches(e)) btns.push(['detach', '切り離す']);
       // 壁いっぱいの建具は、壁ではなく建具の名前で表示する
@@ -1336,8 +1463,13 @@
     if (a === 'rot') { e.rot = ((e.rot || 0) + (f.coll === 'photos' ? 45 : 90)) % 360; commit(); }
     if (a === 'view') viewPhoto(e);
     if (a === 'measure') NZ.photoMeasure(e);
-    if (a === 'detach') { e.free1 = true; e.free2 = true; commit(); toast('切り離しました。この壁の端の丸を引くと、この壁だけが動きます'); }
-    if (a === 'join') { delete e.free1; delete e.free2; commit(); toast('つなぎ直しました。端を動かすと、つながっている壁も一緒に動きます'); }
+    if (a === 'detach') {
+      e.free1 = true; e.free2 = true;
+      if (e.innerMode) e.inner = NZ.wallFrame(e).L; // 形を変えずに切り離す(壁厚分の加算をやめる)
+      commit(); toast('切り離しました(L字・T字とも)。この壁の端の丸を引くと、この壁だけが動きます');
+    }
+    if (a === 'join') { delete e.free1; delete e.free2; NZ.syncInner(P()); commit(); toast('つなぎ直しました。端を動かすと、つながっている壁も一緒に動きます'); }
+    if (a === 'insert') { startInsert(e); }
     if (a === 'flip') {
       [e.x1, e.y1, e.x2, e.y2] = [e.x2, e.y2, e.x1, e.y1];
       e.segments = (e.segments || []).slice().reverse().map((g) => Object.assign({}, g, { hinge: g.hinge === 'end' ? 'start' : 'end', side: g.side === 'left' ? 'right' : 'left' }));
