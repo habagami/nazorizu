@@ -83,6 +83,10 @@ svg { overflow: visible; }
 }
 .icon-btn:active { background: var(--kinari); }
 .icon-btn svg { width: 26px; height: 26px; fill: none; stroke: currentColor; stroke-width: 2.1; stroke-linecap: round; stroke-linejoin: round; }
+/* 文字つきのアイコン(戻す・進む): 矢印だけでは意味が分かりにくいため */
+.icon-btn.labeled { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px; }
+.icon-btn.labeled svg { width: 22px; height: 22px; }
+.icon-btn.labeled span { font-size: 11px; font-weight: 700; line-height: 1; }
 .top-logo { width: 34px; height: 34px; border-radius: 9px; flex: none; }
 .proj-name {
   border: 0; background: transparent; font-weight: 700; font-size: 17px; padding: 8px 10px; border-radius: 12px;

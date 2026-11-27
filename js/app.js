@@ -216,6 +216,7 @@
     if ($('#lay-check').checked) s += issueMarkers(px);
     const t = st.temp;
     if (t) {
+      if (t.erase) s += eraseMarks(px);
       if (t.pts && t.pts.length > 1) s += `<polyline points="${t.pts.map((p) => `${r2(p.x)},${r2(p.y)}`).join(' ')}" fill="none" stroke="#E2552D" stroke-width="${px(3)}" stroke-linecap="round" stroke-linejoin="round" opacity=".8"/>`;
       if (t.wall) s += `<g opacity=".75">${NZ.renderModel({ walls: [t.wall], columns: [], fixtures: [], labels: [], dims: [], zones: [], grid: { xs: [], ys: [], visible: false } }, st.S, { prefix: 'tw' })}</g>`;
       if (t.line) s += `<line x1="${t.line.a.x}" y1="${t.line.a.y}" x2="${t.line.b.x}" y2="${t.line.b.y}" stroke="#E2552D" stroke-width="${px(3)}"/>` + [t.line.a, t.line.b].map((p) => `<circle cx="${p.x}" cy="${p.y}" r="${px(6)}" fill="#E2552D"/>`).join('');
@@ -517,7 +518,8 @@
 
   // ---------- ツール ----------
   const HINTS = {
-    select: 'タップで選ぶ ・ ドラッグで動かす ・ 2回タップで直す',
+    select: 'タップで選ぶ ・ ドラッグで動かす ・ 2回タップで直す ・ 消すときは左の「消す」',
+    erase: '消したい物をタップ ・ なぞると、なぞった物をまとめて消す(間違えたら右上の「戻す」)',
     wall: '測った壁をなぞる → 長さを入れる',
     column: '柱の位置をタップ',
     fixture: '設備を置く所をタップ',
@@ -545,6 +547,7 @@
   function toolDown(p) {
     const t = st.tool;
     if (insertWall || t === 'opening') { st.temp = Object.assign({}, insertPick ? { snap: insertPick.pt } : {}, { pts: [p] }); renderOverlay(); return; }
+    if (t === 'erase') { st.temp = { pts: [p], erase: new Set() }; eraseCollect(p); renderOverlay(); return; }
     if (t === 'select' && st.multi) { action.hit = hitTest(p); return; }
     if (t === 'select') {
       // 選択中の壁の端点を優先
@@ -655,8 +658,36 @@
     }
     return r;
   }
+  // 「消す」でなぞった所にある物を集める。床・水回りの範囲は広く、なぞると巻き込みやすいので、タップしたときだけ消す
+  function eraseCollect(p) {
+    const id = hitTest(p);
+    if (!id) return;
+    const f = findEl(id);
+    if (f && (f.coll === 'floors' || f.coll === 'zones')) return;
+    st.temp.erase.add(id);
+  }
+  function eraseMarks(px) {
+    let s = '';
+    for (const id of st.temp.erase) {
+      const f = findEl(id);
+      if (!f) continue;
+      const e = f.el;
+      const sty = `fill="#E2552D" fill-opacity=".28" stroke="#E2552D" stroke-width="${px(2.5)}"`;
+      if (f.coll === 'walls') {
+        const fr = NZ.wallFrame(e), off = NZ.wallOffset(e), t = e.thick;
+        const q = (s0, k) => ({ x: e.x1 + fr.u.x * s0 + fr.n.x * k, y: e.y1 + fr.u.y * s0 + fr.n.y * k });
+        const pts = [q(0, off - t / 2), q(fr.L, off - t / 2), q(fr.L, off + t / 2), q(0, off + t / 2)];
+        s += `<polygon points="${pts.map((p) => `${r2(p.x)},${r2(p.y)}`).join(' ')}" ${sty}/>`;
+      } else {
+        const b = elBBox(f);
+        s += `<rect x="${r2(b.x0)}" y="${r2(b.y0)}" width="${r2(b.x1 - b.x0)}" height="${r2(b.y1 - b.y0)}" ${sty}/>`;
+      }
+    }
+    return s;
+  }
   function toolMove(p) {
     const t = st.tool;
+    if (t === 'erase' && st.temp && st.temp.erase) { st.temp.pts.push(p); eraseCollect(p); renderOverlay(); return; }
     if ((insertWall || t === 'opening') && st.temp && st.temp.pts) {
       st.temp.pts.push(p);
       const a0 = st.temp.pts[0];
@@ -738,6 +769,18 @@
   function toolUp(p, a, e) {
     const t = st.tool;
     const scrLen = Math.hypot(e.clientX - a.startScr.x, e.clientY - a.startScr.y);
+    if (t === 'erase') {
+      const ids = st.temp && st.temp.erase ? [...st.temp.erase] : [];
+      // タップのときは、床・水回りの範囲も消せる
+      if (scrLen < 14 && !ids.length) { const id = hitTest(p); if (id) ids.push(id); }
+      st.temp = null;
+      if (!ids.length) { renderOverlay(); toast('消す物がありません。線や記号の上をタップするか、なぞってください'); return; }
+      for (const id of ids) removeEl(id);
+      if (ids.includes(st.sel)) st.sel = null;
+      commit();
+      toast(`${ids.length}個 消しました(戻すときは右上の「戻す」)`);
+      return;
+    }
     if (insertWall || t === 'opening') {
       if (scrLen < 14) { handleInsertTap(p, e); return; }
       if (!insertWall) {
@@ -1058,7 +1101,7 @@
       title: o.isNew ? '壁の寸法入力' : '壁の編集',
       html, wide: true, anchor: o.anchor,
       buttons: [
-        ...(o.isNew ? [] : [{ label: '削除', cls: 'danger', onClick: () => { removeEl(w.id); st.sel = null; commit(); } }]),
+        ...(o.isNew ? [] : [{ label: '消す', cls: 'danger', onClick: () => { removeEl(w.id); st.sel = null; commit(); } }]),
         ...(o.altNew ? [{ label: '新しい壁として追加', onClick: () => { setTimeout(o.altNew, 0); } }] : []),
         { label: 'キャンセル', onClick: () => { st.temp = null; renderAll(); } },
         { label: 'OK', cls: 'primary', onClick: (d) => apply(d) },
@@ -1237,7 +1280,7 @@
         <div class="row"><label class="f">寸法線の離れ(紙面mm、+/-で反対側)<input name="off" inputmode="decimal" value="${e.offset}"></label>
         <label class="f">表示文字(空欄=数値)<input name="text" value="${esc(e.text || '')}"></label></div>`,
       buttons: [
-        ...(isNew ? [] : [{ label: '削除', cls: 'danger', onClick: () => { removeEl(e.id); st.sel = null; commit(); } }]),
+        ...(isNew ? [] : [{ label: '消す', cls: 'danger', onClick: () => { removeEl(e.id); st.sel = null; commit(); } }]),
         { label: 'キャンセル', onClick: () => { st.temp = null; renderOverlay(); } },
         {
           label: 'OK', cls: 'primary', onClick: (dd) => {
@@ -1351,7 +1394,7 @@
       html: `<div class="row"><label class="f">幅 X (mm)<input name="w" class="big" inputmode="decimal" value="${Math.round(e.w)}"></label><label class="f">奥行 Y (mm)<input name="d" class="big" inputmode="decimal" value="${Math.round(e.d)}"></label></div>
         <div class="row"><label class="f">種別<select name="kind"><option value="structure" ${e.kind === 'structure' ? 'selected' : ''}>構造柱(変更不可)</option><option value="existing" ${e.kind === 'existing' ? 'selected' : ''}>既存柱・PS等</option></select></label></div>`,
       buttons: [
-        ...(isNew ? [] : [{ label: '削除', cls: 'danger', onClick: () => { removeEl(e.id); st.sel = null; commit(); } }]),
+        ...(isNew ? [] : [{ label: '消す', cls: 'danger', onClick: () => { removeEl(e.id); st.sel = null; commit(); } }]),
         { label: 'キャンセル' },
         {
           label: 'OK', cls: 'primary', onClick: (d) => {
@@ -1388,7 +1431,7 @@
         <div class="row"><label class="f">幅 W (mm)<input name="w" inputmode="decimal" value="${Math.round(e.w)}"></label><label class="f">奥行 D (mm)<input name="d" inputmode="decimal" value="${Math.round(e.d)}"></label><label class="f">高さ H (mm)<input name="h" inputmode="decimal" value="${Math.round(e.h || 0)}"></label></div>
         <div class="row"><label class="f">向き(背面の方向)<select name="rot">${[[0, '上(背面が上)'], [90, '右'], [180, '下'], [270, '左']].map(([v, l]) => `<option value="${v}" ${+e.rot === v ? 'selected' : ''}>${l}</option>`).join('')}${[0, 90, 180, 270].includes(+e.rot) ? '' : `<option value="${e.rot}" selected>${e.rot}°</option>`}</select></label><label class="f">表示名(空欄=種類名)<input name="label" value="${esc(e.label || '')}"></label></div>`,
       buttons: [
-        ...(isNew ? [] : [{ label: '削除', cls: 'danger', onClick: () => { removeEl(e.id); st.sel = null; commit(); } }]),
+        ...(isNew ? [] : [{ label: '消す', cls: 'danger', onClick: () => { removeEl(e.id); st.sel = null; commit(); } }]),
         { label: 'キャンセル' },
         {
           label: 'OK', cls: 'primary', onClick: (d) => {
@@ -1460,7 +1503,7 @@
         <datalist id="room-names">${['LDK', 'リビング', 'ダイニング', 'キッチン', '洋室', '和室', '寝室', '子供室', '浴室', '洗面脱衣室', 'トイレ', '玄関', 'ホール', '廊下', 'WIC', '収納', 'クローゼット', 'バルコニー', 'PS', 'MB'].map((s) => `<option value="${s}">`).join('')}</datalist>
         <div class="row"><label class="f">2行目(広さ・仕上など)<input name="sub" value="${esc(e.sub || '')}" placeholder="例: 12.5帖"></label><label class="f">文字の大きさ(紙面mm)<input name="size" inputmode="decimal" value="${e.size}"></label></div>`,
       buttons: [
-        ...(isNew ? [] : [{ label: '削除', cls: 'danger', onClick: () => { removeEl(e.id); st.sel = null; commit(); } }]),
+        ...(isNew ? [] : [{ label: '消す', cls: 'danger', onClick: () => { removeEl(e.id); st.sel = null; commit(); } }]),
         { label: 'キャンセル' },
         {
           label: 'OK', cls: 'primary', onClick: (d) => {
@@ -1486,7 +1529,7 @@
         <div class="row"><label class="f">幅 (mm)<input name="w" inputmode="decimal" value="${Math.round(e.w)}"></label><label class="f">奥行 (mm)<input name="h" inputmode="decimal" value="${Math.round(e.h)}"></label></div>
         <div class="note">おおよその位置の目安です。印刷には含まれません(図面情報で変更可)。</div>`,
       buttons: [
-        ...(isNew ? [] : [{ label: '削除', cls: 'danger', onClick: () => { removeEl(e.id); st.sel = null; commit(); } }]),
+        ...(isNew ? [] : [{ label: '消す', cls: 'danger', onClick: () => { removeEl(e.id); st.sel = null; commit(); } }]),
         { label: 'キャンセル', onClick: () => { st.temp = null; renderOverlay(); } },
         {
           label: 'OK', cls: 'primary', onClick: (d) => {
@@ -1513,7 +1556,7 @@
         <label class="chk"><input type="checkbox" name="showName" ${e.showName ? 'checked' : ''}>仕上げ名を図面に表示</label>
         <div class="note">L字の部屋は範囲を2つに分けて作成してください。壁の下に隠れる部分は気にせず、壁芯まで囲んで大丈夫です。</div>`,
       buttons: [
-        ...(isNew ? [] : [{ label: '削除', cls: 'danger', onClick: () => { removeEl(e.id); st.sel = null; commit(); } }]),
+        ...(isNew ? [] : [{ label: '消す', cls: 'danger', onClick: () => { removeEl(e.id); st.sel = null; commit(); } }]),
         { label: 'キャンセル', onClick: () => { st.temp = null; renderOverlay(); } },
         {
           label: 'OK', cls: 'primary', onClick: (d) => {
@@ -1591,7 +1634,7 @@
       if (op) title = `${op} ${Math.round(e.innerMode ? e.inner : NZ.wallFrame(e).L)}mm`;
     }
     if (['fixtures', 'columns', 'walls', 'labels', 'floors'].includes(f.coll)) btns.push(['dup', '複製']);
-    btns.push(['del', '削除']);
+    btns.push(['del', '消す']);
     bar.innerHTML = `<span class="sel-title">${esc(title)}${e.detected ? '(未確定)' : ''}</span>` + btns.map(([k, l]) => `<button data-sa="${k}" class="${k === 'del' ? 'danger' : ''}">${l}</button>`).join('');
     bar.classList.remove('hidden');
   }
@@ -2164,7 +2207,7 @@
         <div class="row"><label class="f">メモ(場所・内容)<input name="note" value="${esc(e.note || '')}" placeholder="例: 洋室1 北側の窓まわり"></label></div>
         <p class="note">写真はこの端末の中にだけ保存されます(縮小して保存)。別の端末へは「データ書き出し(.json)」で写真ごと移せます。</p>`,
       buttons: [
-        ...(isNew ? [] : [{ label: '削除', cls: 'danger', onClick: () => { removeEl(e.id); st.sel = null; commit(); } }]),
+        ...(isNew ? [] : [{ label: '消す', cls: 'danger', onClick: () => { removeEl(e.id); st.sel = null; commit(); } }]),
         { label: 'キャンセル' },
         {
           label: 'OK', cls: 'primary', onClick: async (d) => {
@@ -2497,6 +2540,7 @@
         <h4>現場写真</h4><p>「写真」ツールで撮影した位置をタップし、撮影または写真を選んで、撮影した向きとメモを入れます。図面に番号と撮影方向の記号が付き、記号から写真を開けます。メニューの「写真一覧(写真台帳)を印刷」でA4に印刷できます。写真はこの端末の中にだけ保存されます。</p>
         <h4>仕上表・概算見積</h4><p>画面上部の「見積」で、部屋ごとの床・壁・天井面積、巾木・廻り縁の長さ、建具・設備の個数が図面から自動で出ます。材料単価・工賃単価を入れると金額・消費税・合計を計算します。入れた単価はこの端末に記憶され、次の図面でも使われます。配管・解体・諸経費などは「＋行を追加」で入れます。</p>
         <h4>写真で建具を測る</h4><p>壁を選んで「写真で測る」を押し、四隅が写るように壁を撮ります。四隅に○を合わせて実測した壁の幅・高さを入れると、写真の歪みを補正します。補正した画像でドア・窓を囲むと、位置・幅・腰高・高さを計算して壁に反映します。値は目安なので、実測できる箇所は実測値に直してください。</p>
+        <h4>消す・戻す</h4><p>左の「消す」を選んで、消したい物をタップします。なぞると、なぞった物をまとめて消せます。「選ぶ」でタップして、下に出る「消す」を押しても消せます。間違えたときは、右上の「戻す」で1つ前に戻ります。戻しすぎたら「進む」を押します。</p>
         <h4>操作</h4><ul><li>ペン・指1本: 作図 / 指2本: 画面の移動・拡大縮小(「指で描く」をOFFにすると、指1本で画面移動)</li><li>長さ欄は「1820+910」のような計算式も使えます</li><li>データは端末内に自動保存されます。別端末へは「データ書き出し(.json)」で移せます</li></ul>
       </div>`,
       buttons: [{ label: '閉じる', cls: 'primary' }],
